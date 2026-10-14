@@ -32,6 +32,8 @@ def snapshot(root):
                     pass
     capture = root/'captures/depth.npy'
     return {'scene': scene, 'depth_info': read_json(root/'captures/depth-info.json'),
+        'contact_state': read_json(root/'config/contact-state.json'),
+        'contact_clearance': read_json(root/'captures/contact-clearance.json'),
         'depth_age_s': time.time()-capture.stat().st_mtime if capture.exists() else None,
         'scene_age_s': time.time()-scene['captured_at_pc_s'] if scene else None,
         'events': events[-40:], 'rgb_trial': read_json(root/'logs/rgb-trial.json'),

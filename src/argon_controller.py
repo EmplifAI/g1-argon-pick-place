@@ -91,6 +91,9 @@ def ask(image,state,history):
     compact['left_arm']=state['motors'][15:22]
     compact['other_active_joints']=[m['id'] for m in state['motors'] if m['id'] not in range(15,22) and m['mode']!=0]
     content=PROMPT+'\nState:'+json.dumps(compact)+'\nPrevious decisions:'+json.dumps(history[-2:],ensure_ascii=False)
+    contact=root/'config/contact-state.json'
+    if contact.exists():
+        content+='\nUser-reported table contact:'+contact.read_text()
     targets=root/'captures/scene-targets.json'
     if targets.exists():content+='\nMeasured depth targets:'+targets.read_text()
     config=json.loads((root/'config/argon.json').read_text())
@@ -157,6 +160,9 @@ def work(initial_generation):
             op=action.get('action')
             status=action.get('observation_ja','Argon指令確認中')
             if op=='enable':
+                contact_path=root/'config/contact-state.json'
+                if contact_path.exists() and json.loads(contact_path.read_text()).get('motion_blocked'):
+                    raise ValueError('左肘・前腕が机に接触中。離脱経路が未検証です')
                 if current['controller_active'] and not current['stopped']:raise ValueError('Already enabled')
                 ack=robot('/enable',{'generation':expected_generation,'boot_id':expected_boot})
                 expected_generation=ack['generation']

@@ -9,7 +9,7 @@
 window.addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='Escape'){e.preventDefault();fetch('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});}});
 const el=id=>document.getElementById(id);let stamp=null;
 async function refresh(){try{const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('取得失敗');const d=await r.json(),s=d.scene||{},i=d.depth_info||{};
-el('scene').textContent=JSON.stringify({depth_age_s:d.depth_age_s,scene_age_s:d.scene_age_s,depth_profile:i.operational_profile,table_quality:s.table_quality,camera_tool_calibrated:s.calibration_verified,obstacles_segmented:s.scene_segmentation_verified,blocked_reasons:s.blocked_reasons,recording_directory:d.recording_directory},null,2);
+el('scene').textContent=JSON.stringify({depth_age_s:d.depth_age_s,scene_age_s:d.scene_age_s,depth_profile:i.operational_profile,table_quality:s.table_quality,camera_tool_calibrated:s.calibration_verified,obstacles_segmented:s.scene_segmentation_verified,contact_state:d.contact_state,contact_clearance:d.contact_clearance,blocked_reasons:s.blocked_reasons,recording_directory:d.recording_directory},null,2);
 if(stamp!==d.scene?.captured_at_pc_s){stamp=d.scene?.captured_at_pc_s;el('depth').src='/depth-view.png?t='+stamp;el('table').src='/table-view.png?t='+stamp;}
 el('trial').textContent=d.rgb_trial?JSON.stringify(d.rgb_trial,null,2):'未取得';
 el('log').replaceChildren();for(const e of [...d.events].reverse()){const p=document.createElement('pre');p.textContent=new Date(e.pc_time_s*1000).toLocaleString()+' '+JSON.stringify(e,null,2);el('log').append(p);}

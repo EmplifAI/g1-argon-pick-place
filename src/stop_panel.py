@@ -64,6 +64,12 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:s.update(argon_ready=False,argon_status='Argon制御プロセス準備中')
         try:s['recording_directory']=json.loads((root/'config/recording-session.json').read_text())['directory']
         except Exception:pass
+        try:
+            contact=json.loads((root/'config/contact-state.json').read_text())
+            if contact.get('motion_blocked'):
+                s['argon_ready']=False
+                s['argon_status']='左肘・前腕が机に接触中。離脱経路の確認待ち（多少の押し付けは許容）'
+        except (OSError,ValueError):pass
         return s
     def do_GET(self):
         if self.path.split('?')[0] in ['/diagnostics-page','/depth-view.png','/table-view.png']:
@@ -92,6 +98,9 @@ class Handler(BaseHTTPRequestHandler):
                 event('stop',robot_ack=ack);self.reply({'robot_ack':ack,'stopped':True})
             elif self.path=='/heartbeat':self.reply(self.state(True))
             elif self.path=='/start':
+                contact=root/'config/contact-state.json'
+                if contact.exists() and json.loads(contact.read_text()).get('motion_blocked'):
+                    raise ValueError('左肘・前腕の机からの離脱経路が未検証です')
                 n=int(self.headers.get('Content-Length','0'))
                 if n>4096:raise ValueError('Request too large')
                 data=json.loads(self.rfile.read(n));result=request(ARGON,'/start',data,timeout=1.5)
