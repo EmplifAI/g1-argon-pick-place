@@ -6,6 +6,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from stop_guard import latch_stop
+from diagnostics import snapshot
 ROBOT='http://192.168.123.164:8767'
 ARGON='http://127.0.0.1:8768'
 root=Path(__file__).resolve().parents[1]
@@ -18,7 +19,9 @@ button{width:100%;min-height:100px;color:white;font:bold 32px sans-serif;border:
 <h1>G1 · Argon · 左腕／左手</h1><button id="stop">停止 — Space / Esc</button>
 <button id="start" disabled>開始 — Argonで実行</button><p id="status">接続確認中・動作禁止</p>
 <p>緑のボトル → 緑のROBOのB。停止で手を開きません。吊り具を維持してください。</p>
-<img src="http://127.0.0.1:8765/stream" alt="G1 RGB映像"><script>
+<img src="http://127.0.0.1:8765/stream" alt="G1 RGB映像">
+<p><a href="/diagnostics-page" target="_blank" style="color:#8df">認識・Argon指令を別画面で開く</a></p>
+<iframe src="/diagnostics-page" title="認識とArgon指令" style="width:100%;height:1000px;border:0"></iframe><script>
 const status=document.getElementById('status'),startButton=document.getElementById('start');
 let generation=null,stopping=false,starting=false,polling=false,stopEpoch=0;
 async function post(path,data={}){let r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data),signal:AbortSignal.timeout(path==='/start'?3000:1200)});let s=await r.json();if(!r.ok)throw Error(s.error||'要求失敗');return s;}
@@ -63,6 +66,17 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:pass
         return s
     def do_GET(self):
+        if self.path.split('?')[0] in ['/diagnostics-page','/depth-view.png','/table-view.png']:
+            name=self.path.split('?')[0]
+            path=root/'src/diagnostics.html' if name=='/diagnostics-page' else root/'captures'/name[1:]
+            try:body=path.read_bytes()
+            except OSError:self.reply({'error':'認識画像は未取得'},404);return
+            self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8' if name=='/diagnostics-page' else 'image/png')
+            self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+        if self.path=='/diagnostics':
+            try:self.reply(snapshot(root))
+            except Exception:self.reply({'error':'診断情報を読み取れません'},503)
+            return
         if self.path=='/':
             self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(PAGE)));self.end_headers();self.wfile.write(PAGE);return
         try:self.reply(self.state())

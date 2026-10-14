@@ -33,6 +33,8 @@ class PickPlaceTools:
             raise ValueError("RGB-D scene is stale; capture a new scene")
         if not s.get("calibration_verified"):
             raise ValueError("Camera/tool calibration is not empirically verified")
+        if not s.get('scene_segmentation_verified'):
+            raise ValueError('Robot/object/obstacle segmentation has not been verified')
         return s
 
     def observe(self):

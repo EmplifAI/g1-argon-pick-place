@@ -1,0 +1,17 @@
+<!doctype html><html lang="ja"><meta charset="utf-8">
+<style>body{background:#151a22;color:#eef;font:16px sans-serif;margin:12px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}img{width:100%}article{background:#232c38;padding:12px;border-radius:8px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px monospace}#log{max-height:480px;overflow:auto}.warn{color:#ffcc75}@media(max-width:750px){.grid{grid-template-columns:1fr}}</style>
+<h2>認識とArgon指令</h2><p class="warn">RGBはライブ。デプスと面は取得時点のスナップショットです。緑は平面から4mm以内の深度点で、物体の意味認識や移動可能領域ではありません。</p>
+<div class="grid"><article>デプス：赤＝近い／青＝遠い／黒＝無効（0.2〜1.5m）<img id="depth" src="/depth-view.png"></article><article>テーブル平面の深度点（RGB座標へ投影）<img id="table" src="/table-view.png"></article></div>
+<article><h3>取得情報・動作条件</h3><pre id="scene">取得中</pre></article>
+<article><h3>Argonの最新RGB判断（動作なし）</h3><pre id="trial"></pre></article>
+<article><h3>Argon指令・受付・停止ログ</h3><p>時刻を確認してください。過去の実行も表示します。「受付」は完了を意味しません。</p><div id="log"></div></article>
+<script>
+window.addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='Escape'){e.preventDefault();fetch('/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).catch(()=>{});}});
+const el=id=>document.getElementById(id);let stamp=null;
+async function refresh(){try{const r=await fetch('/diagnostics',{cache:'no-store'});if(!r.ok)throw Error('取得失敗');const d=await r.json(),s=d.scene||{},i=d.depth_info||{};
+el('scene').textContent=JSON.stringify({depth_age_s:d.depth_age_s,scene_age_s:d.scene_age_s,depth_profile:i.operational_profile,table_quality:s.table_quality,camera_tool_calibrated:s.calibration_verified,obstacles_segmented:s.scene_segmentation_verified,blocked_reasons:s.blocked_reasons,recording_directory:d.recording_directory},null,2);
+if(stamp!==d.scene?.captured_at_pc_s){stamp=d.scene?.captured_at_pc_s;el('depth').src='/depth-view.png?t='+stamp;el('table').src='/table-view.png?t='+stamp;}
+el('trial').textContent=d.rgb_trial?JSON.stringify(d.rgb_trial,null,2):'未取得';
+el('log').replaceChildren();for(const e of [...d.events].reverse()){const p=document.createElement('pre');p.textContent=new Date(e.pc_time_s*1000).toLocaleString()+' '+JSON.stringify(e,null,2);el('log').append(p);}
+}catch(e){el('scene').textContent=e.message;}}refresh();setInterval(refresh,1000);
+</script></html>

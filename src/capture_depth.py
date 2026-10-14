@@ -8,14 +8,20 @@ root = Path(__file__).resolve().parents[1] / "captures"
 root.mkdir(exist_ok=True)
 pipeline = rs.pipeline()
 config = rs.config()
-config.enable_stream(rs.stream.depth, 1280, 720, rs.format.z16, 15)
+config.enable_stream(rs.stream.depth, 848, 480, rs.format.z16, 30)
 started = False
 try:
     profile = pipeline.start(config)
     started = True
     device = profile.get_device()
+    sensor = device.first_depth_sensor()
+    options = {}
+    for option, value in [(rs.option.enable_auto_exposure, 1), (rs.option.emitter_enabled, 1)]:
+        if sensor.supports(option):
+            sensor.set_option(option, value)
+            options[str(option)] = sensor.get_option(option)
     frame = None
-    for _ in range(8):
+    for _ in range(30):
         frame = pipeline.wait_for_frames(2000).get_depth_frame()
     depth_profile = frame.profile.as_video_stream_profile()
     color_profiles = [p.as_video_stream_profile() for s in device.query_sensors()
@@ -31,6 +37,8 @@ try:
                 "ppx": i.ppx, "ppy": i.ppy, "model": str(i.model), "coeffs": i.coeffs}
     ex = depth_profile.get_extrinsics_to(color_profile)
     info = {"model": device.get_info(rs.camera_info.name),
+            "operational_profile": "848x480@30", "sensor_options": options,
+            "native_max_depth_resolution": [1280, 720],
             "depth_scale_m": device.first_depth_sensor().get_depth_scale(),
             "depth_intrinsics": intrinsics(depth_profile),
             "color_intrinsics": intrinsics(color_profile),
