@@ -1,0 +1,12 @@
+{
+  "robot": "Unitree G1 29-axis rev_1_0",
+  "hand_model": "RH56DFQ",
+  "hand_model_confirmed_by": "user physical nameplate",
+  "camera_mount_confirmed_by_user": "factory head-mounted Intel RealSense D435I",
+  "urdf": "vendor/unitree_ros/robots/g1_description/g1_29dof_rev_1_0_with_inspire_hand_DFQ.urdf",
+  "urdf_commit": "5994d4faef0a9cadd3287f8de0199a67eeb2a259",
+  "left_arm_motor_ids": [15, 16, 17, 18, 19, 20, 21],
+  "left_hand_serial_port": "/dev/ttyUSB2",
+  "suspended_confirmed_by_user": true,
+  "active_scope": "left arm and left hand only"
+}

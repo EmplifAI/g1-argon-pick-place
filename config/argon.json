@@ -1,0 +1,6 @@
+{
+  "model": "gemini-4-argon",
+  "generation_config": {"thinking_level": "low"},
+  "service_tier": "priority",
+  "store": false
+}

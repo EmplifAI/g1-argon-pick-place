@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.env.*
+vendor/
+captures/
+records/
+logs/
+config/*-state.json
+config/*-session.json
+config/*.pid
+config/calibration.json
+*.pem
+*.key
