@@ -4,6 +4,7 @@ import urllib.request
 from pathlib import Path
 import numpy as np
 import pinocchio as pin
+from left_arm_kinematics import LeftArmKinematics
 root=Path(__file__).resolve().parents[1]
 config=json.loads((root/'config/robot.json').read_text())
 model=pin.buildModelFromUrdf(str(root/config['urdf']))
@@ -18,6 +19,7 @@ for i,name in enumerate(names):
     jid=model.getJointId(name)
     if jid==model.njoints:raise ValueError('Missing joint '+name)
     q[model.joints[jid].idx_q]=state['motors'][i]['q']
+q=LeftArmKinematics(root).configuration(state)
 data=model.createData();pin.framesForwardKinematics(model,data,q)
 camera=data.oMf[model.getFrameId('d435_link')]
 # Camera optical axes: right/down/forward -> robot forward/left/up.

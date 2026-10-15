@@ -18,13 +18,16 @@ condition = threading.Condition()
 
 def fetch_frames():
     global latest, latest_at, frame_count
+    import os
     client = VideoClient()
     client.SetTimeout(3.0)
     client.Init()
+    bad_streak = 0
     while True:
         try:
             code, data = client.GetImageSample()
             if code == 0 and data:
+                bad_streak = 0
                 with condition:
                     latest = bytes(data)
                     latest_at = time.monotonic()
@@ -32,11 +35,21 @@ def fetch_frames():
                     condition.notify_all()
                 time.sleep(0.03)
             else:
-                print(f"Video hub returned code {code}", flush=True)
-                time.sleep(0.25)
+                bad_streak += 1
+                print(f"Video hub returned code {code} (streak={bad_streak})", flush=True)
+                time.sleep(0.35)
         except Exception as exc:
-            print(f"Video hub request failed: {exc}", flush=True)
-            time.sleep(1)
+            bad_streak += 1
+            print(f"Video hub request failed: {exc} (streak={bad_streak})", flush=True)
+            time.sleep(1.0)
+        if bad_streak >= 15:
+            # If G1 is reachable on 192.168.123.164:8767, exit so systemd restarts CycloneDDS cleanly
+            try:
+                with socket.create_connection(("192.168.123.164", 8767), timeout=1.0):
+                    print("G1 is online but video stream stalled; exiting for clean DDS restart", flush=True)
+                    os._exit(1)
+            except OSError:
+                bad_streak = 0
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -60,7 +73,20 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(page)
             return
-        if self.path != "/stream":
+        if self.path.startswith("/frame.jpg"):
+            with condition:
+                frame = latest
+            if not frame:
+                self.send_error(503)
+                return
+            self.send_response(200)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(frame)))
+            self.end_headers()
+            self.wfile.write(frame)
+            return
+        if not self.path.startswith("/stream"):
             self.send_error(404)
             return
         self.send_response(200)
@@ -89,9 +115,7 @@ ChannelFactoryInitialize(0, "enp12s0")
 with socket.socket() as probe:
     if probe.connect_ex(("127.0.0.1", 8765)) == 0:
         print("G1 RealSense preview is already running at http://127.0.0.1:8765/", flush=True)
-        webbrowser.open("http://127.0.0.1:8765/")
         raise SystemExit(0)
 threading.Thread(target=fetch_frames, daemon=True).start()
-print("Open http://127.0.0.1:8765/ in Ubuntu Browser; Ctrl+C stops preview.", flush=True)
-threading.Timer(1.0, lambda: webbrowser.open("http://127.0.0.1:8765/")).start()
+print("Serving G1 RealSense preview on http://127.0.0.1:8765/", flush=True)
 ThreadingHTTPServer(("127.0.0.1", 8765), Handler).serve_forever()

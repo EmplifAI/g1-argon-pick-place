@@ -41,6 +41,7 @@ class SafetyCore:
             self.hand_target = self.hand_q.copy()
 
     def enable(self, q, hand_q=None):
+        was_active=self.active
         self.check_health()
         if self.clock() - self.last_heartbeat > 0.4:
             raise ValueError("No recent PC heartbeat")
@@ -48,13 +49,22 @@ class SafetyCore:
             raise ValueError("No recent robot state")
         if len(q) != 7 or not all(math.isfinite(v) for v in q):
             raise ValueError("Invalid left-arm state")
-        self.q = list(q)
+        if self.active:
+            if not self.stopped:
+                raise ValueError('Already enabled')
+            if max(abs(a-b) for a,b in zip(q,self.q)) > .25:
+                raise ValueError('Cannot resume a poorly tracking arm')
+            # The existing command supplies holding torque through PD. Resetting
+            # it to measured q removes that torque and can let the arm drop.
+            # Preserve it across an explicitly requested resume.
+        else:
+            self.q = list(q)
+            self.hand_q = list(hand_q) if hand_q is not None else None
         self.target = self.q.copy()
-        self.hand_q = list(hand_q) if hand_q is not None else None
         self.hand_target = self.hand_q.copy() if self.hand_q is not None else None
         self.active = True
         self.stopped = False
-        self.reason = "enabled at measured position"
+        self.reason = "enabled with preserved hold" if was_active else "enabled at measured position"
         self.trajectory = None
         self.generation += 1
 

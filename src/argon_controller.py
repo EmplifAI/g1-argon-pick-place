@@ -18,7 +18,7 @@ if not key:raise SystemExit('Missing API credential on stdin')
 lock=threading.RLock()
 cancel=threading.Event()
 running=False
-status='Argon low 接続済み・開始待ち'
+status='Argon low 接続済み・左腕練習の開始待ち'
 step_counter=0
 ROBOT='http://192.168.123.164:8767'
 
@@ -52,14 +52,28 @@ def frame():
     raise ValueError('Camera frame unavailable')
 
 PROMPT='''You control a REAL suspended Unitree G1 29-axis with LEFT RH56DFQ Inspire Hand.
-Task: grasp the green bottle with the left hand and place the bottle base at the B
-in the GREEN ROBO text (not the Os). Every movement decision is yours, not another policy.
+Task: eventually grasp the green bottle with the left hand and place the bottle base
+at the B in the GREEN ROBO text (not the Os).
+LEFT PINKY AND RING ARE BROKEN. Use thumb/index/middle only. Do not command
+pinky/ring or use their force readings as grasp evidence. Their positions are frozen
+in planning and their serial target registers are excluded from writes.
+Every movement decision is yours, not another policy.
 You receive a fresh RGB image, robot state, and available depth/geometry metadata.
 Output ONLY one JSON primitive at a time with action and observation_ja.
-Actions: enable, observe, open_hand, move_left_hand, grasp_bottle,
+Actions: enable, observe, trial_left_arm, open_hand, move_left_hand, grasp_bottle,
 verify_grasp, place_at, release_at_B, stop, done.
 enable has no extra fields. It takes over the LEFT arm at measured position only;
-it does not move to home, and it sets the left hand position to its measured grip.
+it does not move to home. It does not write hand targets until a hand tool is used.
+Current authorized mode: bounded ARM-ONLY PRACTICE, maximum THREE trials per start.
+User allows slight tabletop pressure and physical exploration. Use fresh RGB
+to select one trial_left_arm with joint_id from the supplied candidates. It moves
+the shoulder or elbow by 0.04 rad at 0.02 rad/s along a locally bounded trajectory.
+Candidate elbow/wrist/palm motion is nominally non-downward and below 25mm;
+this is a relative probe, not an absolute grasp. Inspect cables/bottle before each.
+After each trial inspect the fresh image and measured result; stop after three,
+or earlier if contact/snags/large tracking error. No finger operations in practice.
+If already stopped, first enable then use trial_left_arm. Do not repeatedly observe
+instead of deciding when a clear, bounded candidate exists. Choose stop if unsafe.
 move_left_hand and place_at require xyz_m in robot-base coordinates and a 3x3
 rotation matrix. They perform left-arm IK, collision checks and a continuous
 7-joint trajectory locally at <=0.06 rad/s; you do NOT micromanage individual joints.
@@ -76,8 +90,9 @@ retracting may be needed because the fingers are initially against the bottle si
 while the thumb is outside the grasp. Do not close from an unsuitable hand pose.
 Cartesian motion is available only when the empirical camera/tool calibration and
 fresh RGB-D scene report calibration_verified=true. Never invent coordinates or
-claim calibration. If the scene is unverified, you may observe or open the empty
-hand, then stop with the specific missing calibration evidence.
+claim calibration. Unverified calibration does not block the authorized relative
+arm-only trials; it still blocks all Cartesian grasp/place actions. If candidates
+are exhausted, stop and explain the outcome. Do not open the hand in practice mode.
 Raw finger force is NOT calibrated; absolute values are not reliable yet. Do not
 claim a stable grasp or lift without fresh visual and state evidence. Stop freezes
 the arm target and existing grip; it never opens the hand. PC heartbeat is required.
@@ -85,12 +100,13 @@ After stop/done, no further movement is sent. done only when the bottle is uprig
 released, and verified at B. Use observe rather than inventing observations.
 '''
 
-def ask(image,state,history):
+def ask(image,state,history,trial_candidates=None):
     compact={k:state.get(k) for k in ['stopped','reason','generation','controller_active',
               'heartbeat_age','state_age','left_hand','hand_state_age','hand_error','target_q']}
     compact['left_arm']=state['motors'][15:22]
     compact['other_active_joints']=[m['id'] for m in state['motors'] if m['id'] not in range(15,22) and m['mode']!=0]
     content=PROMPT+'\nState:'+json.dumps(compact)+'\nPrevious decisions:'+json.dumps(history[-2:],ensure_ascii=False)
+    content+='\nAvailable relative arm trial candidates:'+json.dumps(trial_candidates or [])
     contact=root/'config/contact-state.json'
     if contact.exists():
         content+='\nUser-reported table contact:'+contact.read_text()
@@ -152,7 +168,7 @@ def work(initial_generation):
             (session_dir()/name).write_bytes(image)
             record('observation',image=name,state=state)
             status='Argon low 判断中（ステップ%d）'%(step+1)
-            action=ask(image,state,history)
+            action=ask(image,state,history,tools.arm_trial_candidates(state))
             if cancel.is_set():break
             # Detect STOP even if it arrived while the model was thinking.
             current=robot('/state')
@@ -160,12 +176,12 @@ def work(initial_generation):
             op=action.get('action')
             status=action.get('observation_ja','Argon指令確認中')
             if op=='enable':
-                contact_path=root/'config/contact-state.json'
-                if contact_path.exists() and json.loads(contact_path.read_text()).get('motion_blocked'):
-                    raise ValueError('左肘・前腕が机に接触中。離脱経路が未検証です')
                 if current['controller_active'] and not current['stopped']:raise ValueError('Already enabled')
+                if not current['controller_active']:robot('/prepare-lowlevel',{})
                 ack=robot('/enable',{'generation':expected_generation,'boot_id':expected_boot})
                 expected_generation=ack['generation']
+            elif op=='trial_left_arm':
+                ack=tools.trial_left_arm(action['joint_id'],expected_generation)
             elif op=='move_left_hand':
                 ack=tools.move_left_hand(action['xyz_m'],action['rotation'],expected_generation)
             elif op=='open_hand':
@@ -187,6 +203,12 @@ def work(initial_generation):
                 status=('完了：' if op=='done' else 'Argon停止：')+action.get('blocking_reason_ja',action.get('observation_ja',''))
                 record(op,action=action);return
             else:raise ValueError('Unsupported Argon action '+str(op))
+            if op not in ('observe',):
+                # Keep prompt history compact; the complete telemetry is already
+                # recorded separately and is not needed twice on the next turn.
+                result=({k:ack.get(k) for k in ['generation','stopped','target_q','hand_write_enabled']}
+                        if op=='enable' else ack)
+                action=dict(action,measured_result=result)
             history.append(action)
             record('primitive_accepted',action=action)
         if cancel.is_set():status='PC停止：Argonの遅延応答は実行しません'
@@ -206,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)))
         self.end_headers();self.wfile.write(body)
     def do_GET(self):
-        self.reply({'ready':not running,'running':running,'status':status})
+        self.reply({'ready':not running,'running':running,'status':status,'mode':'argon_vision_pick_place','pick_place_ready':True})
     def do_POST(self):
         global running,status
         try:

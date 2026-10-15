@@ -50,9 +50,15 @@ class InspireLeft:
                 "errors": list(self.read(1606, 6)),
                 "temperature_c": list(self.read(1618, 6))}
 
-    def set_positions(self, q):
-        payload = struct.pack("<6h", *[round(x * 1000) for x in q])
-        if self.request(18, 1486, payload, 9) != b"\x01":
+    def set_positions(self, q, disabled=(0, 1)):
+        # Registers 1486/1488 are damaged pinky/ring. This contiguous write
+        # starts at ANGLE_SET(2), so neither damaged channel is written.
+        if tuple(disabled) != (0, 1):
+            raise ValueError('Expected confirmed damaged pinky/ring isolation')
+        if len(q) != 6 or not all(0 <= x <= 1 for x in q[2:]):
+            raise ValueError('Invalid three-finger target')
+        payload = struct.pack("<4h", *[round(x * 1000) for x in q[2:]])
+        if self.request(18, 1490, payload, 9) != b"\x01":
             raise RuntimeError("Hand position write rejected")
 
     def close(self):

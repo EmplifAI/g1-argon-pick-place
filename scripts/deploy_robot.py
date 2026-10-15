@@ -27,7 +27,7 @@ sftp=client.open_sftp()
 for directory in [remote,remote+'/src',remote+'/config',remote+'/captures',remote+'/logs','/home/'+args.user+'/.config','/home/'+args.user+'/.config/systemd','/home/'+args.user+'/.config/systemd/user']:
     try:sftp.mkdir(directory)
     except OSError:pass
-for name in ['robot_stop_bridge.py','safety_core.py','inspire_serial.py','capture_depth.py']:
+for name in ['robot_stop_bridge.py','safety_core.py','inspire_serial.py','capture_depth.py','holding_transfer.py']:
     sftp.put(str(root/'src'/name),remote+'/src/'+name)
 for name in ['robot.json','left-arm-limits.json']:
     sftp.put(str(root/'config'/name),remote+'/config/'+name)

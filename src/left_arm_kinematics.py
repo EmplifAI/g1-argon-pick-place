@@ -1,5 +1,6 @@
 """Official DFQ model: left-only FK, IK, and continuous path validation."""
 import json
+import xml.etree.ElementTree as ET
 from pathlib import Path
 import numpy as np
 import pinocchio as pin
@@ -17,7 +18,10 @@ class LeftArmKinematics:
     def __init__(self, root):
         self.root = Path(root)
         cfg = json.loads((self.root / "config/robot.json").read_text())
-        self.model = pin.buildModelFromUrdf(str(self.root / cfg["urdf"]))
+        urdf_rel = cfg.get("ik_urdf", cfg["urdf"])
+        if not (self.root / urdf_rel).exists():
+            urdf_rel = cfg["urdf"]
+        self.model = pin.buildModelFromUrdf(str(self.root / urdf_rel))
         self.data = self.model.createData()
         self.indices = [self.model.joints[self.model.getJointId(n)].idx_q for n in BODY_JOINTS]
         self.left = self.indices[15:22]
@@ -26,6 +30,11 @@ class LeftArmKinematics:
         self.tool_frame = self.model.getFrameId("L_hand_base_link")
         # This offset must be verified against the real hand before grasping.
         self.tool_offset = np.array(cfg.get("grasp_offset_m", [0.0, -0.09, 0.03]))
+        self.hand_mimics = {}
+        for joint in ET.parse(self.root / urdf_rel).findall('joint'):
+            mimic = joint.find('mimic')
+            if joint.get('name','').startswith('L_') and mimic is not None:
+                self.hand_mimics[joint.get('name')] = (mimic.get('joint'),float(mimic.get('multiplier','1')),float(mimic.get('offset','0')))
 
     def configuration(self, state):
         q = pin.neutral(self.model)
@@ -36,13 +45,19 @@ class LeftArmKinematics:
             for jid, name in enumerate(self.model.names):
                 if not name.startswith("L_") or self.model.joints[jid].nq != 1:
                     continue
-                motor = next((i for text, i in [("little", 0), ("ring", 1), ("middle", 2), ("index", 3), ("thumb", 4)] if text in name), None)
+                if name in self.hand_mimics:
+                    continue
+                motor = next((i for text, i in [("pinky", 0), ("little", 0), ("ring", 1), ("middle", 2), ("index", 3), ("thumb", 4)] if text in name), None)
                 if motor is None:
                     continue
                 if "thumb" in name and "yaw" in name:
                     motor = 5
                 idx = self.model.joints[jid].idx_q
                 q[idx] = self.model.upperPositionLimit[idx] - h["q"][motor] * (self.model.upperPositionLimit[idx] - self.model.lowerPositionLimit[idx])
+            for name, (parent, multiplier, offset) in self.hand_mimics.items():
+                child_idx = self.model.joints[self.model.getJointId(name)].idx_q
+                parent_idx = self.model.joints[self.model.getJointId(parent)].idx_q
+                q[child_idx] = multiplier*q[parent_idx]+offset
         return q
 
     def pose(self, full_q, left_q=None):

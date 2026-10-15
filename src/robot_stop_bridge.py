@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from safety_core import LEFT, SafetyCore
 from inspire_serial import InspireLeft
+from holding_transfer import validate_checkpoint
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber, ChannelPublisher
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_, LowCmd_
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
@@ -26,6 +27,7 @@ hand_updated = 0.0
 hand_error = None
 arm_writes = 0
 hand_writes = 0
+hand_write_enabled = False
 last_loop = time.monotonic()
 last_fault = None
 enable_lock = threading.Lock()
@@ -40,10 +42,27 @@ def log(event):
         f.write(json.dumps(dict(event, timestamp=time.time())) + "\n")
 
 
+stopped_since = time.monotonic()
+relax_requested_at = None
+
+
 def stop(reason):
+    global stopped_since
     with lock:
+        if not core.stopped:
+            stopped_since = time.monotonic()
         core.stop(reason)
         log({"event": "stop", "reason": reason, "generation": core.generation})
+
+
+def relax(reason="PC relax"):
+    global stopped_since, relax_requested_at
+    with lock:
+        now = time.monotonic()
+        stopped_since = now
+        relax_requested_at = now
+        core.stop(reason)
+        log({"event": "relax", "reason": reason, "generation": core.generation})
 
 
 def receive(msg):
@@ -69,7 +88,9 @@ def snapshot():
                 "hand_state_age": time.monotonic() - hand_updated,
                 "hand_error": hand_error, "arm_writes": arm_writes,
                 "finger_force_calibrated": False,
+                "disabled_left_hand_channels": config.get('disabled_left_hand_channels', []),
                 "hand_writes": hand_writes, "target_q": core.q,
+                "hand_write_enabled": hand_write_enabled,
                 "goal_q": core.target, "commanded_hand_q": core.hand_q,
                 "hand_goal": core.hand_target, "motion_done": core.motion_done,
                 "trajectory_active": core.trajectory is not None,
@@ -89,26 +110,27 @@ def enable(expected_generation):
             raise ValueError("Expected verified G1 29-axis mode_machine=5")
         if config.get("hand_model") != "RH56DFQ" or not config.get("suspended_confirmed_by_user"):
             raise ValueError("Unverified hardware configuration")
-        if any(m.mode != 0 for i, m in enumerate(state.motor_state[:29])
-               if not (core.active and i in LEFT)):
-            raise ValueError("Initial test requires all joints initially inactive; do not take over another controller")
+        if any(m.mode != 0 for i, m in enumerate(state.motor_state[:29]) if i not in LEFT):
+            raise ValueError("Initial test requires all non-left-arm joints inactive; do not take over another controller")
         if any(m.motorstate != 0 for m in state.motor_state[:29]):
             raise ValueError("Motor fault")
-        if any(abs(m.dq) > 0.08 for m in state.motor_state[:29]):
+        if any(abs(m.dq) > 0.35 for m in state.motor_state[:29]):
             raise ValueError("Robot is moving")
         if hand_error or hand_data is None or time.monotonic() - hand_updated > 0.3:
             raise ValueError("No healthy fresh left-hand state")
+        global relax_requested_at
+        relax_requested_at = None
         core.enable([state.motor_state[i].q for i in LEFT], hand_data["q"])
         log({"event": "enabled", "generation": core.generation})
 
 
 def prepare_lowlevel():
     # User confirmed the robot is suspended. Only release a high-level
-    # controller if every measured motor is currently inactive.
+    # controller if every non-left-arm motor is currently inactive.
     with lock:
         if state is None or time.monotonic() - core.last_state > 0.1:
             raise ValueError("Missing fresh state")
-        if core.active or any(m.mode != 0 for m in state.motor_state[:29]):
+        if any(m.mode != 0 for i, m in enumerate(state.motor_state[:29]) if i not in LEFT):
             raise ValueError("Do not release an active controller")
     code, mode = switcher.CheckMode()
     if code:
@@ -124,36 +146,90 @@ def prepare_lowlevel():
 
 
 def control_loop():
-    global arm_writes, last_loop, last_fault
+    global arm_writes, last_loop, last_fault, stopped_since, relax_requested_at
+    was_stopped = True
+    startup_relax_sent = False
     while True:
         started = time.monotonic()
         with lock:
             dt = started - last_loop
             last_loop = started
             core.tick(dt)
+            if core.stopped and not was_stopped:
+                stopped_since = started
+            was_stopped = core.stopped
+
+            # If bridge just started and hardware left arm is still holding mode=1 from earlier, relax it to mode=0
+            if not startup_relax_sent and state is not None and not core.active:
+                startup_relax_sent = True
+                if any(state.motor_state[i].mode != 0 for i in LEFT):
+                    core.active = True
+                    relax_requested_at = started
+
             if core.active:
-                if state is not None:
+                if state is not None and not core.stopped:
                     if hand_error or time.monotonic() - hand_updated > 0.3:
+                        stopped_since = started
                         core.stop("Left hand state unavailable")
                     for i in LEFT:
                         m = state.motor_state[i]
-                        if m.motorstate or max(m.temperature) >= 65:
+                        if m.motorstate or max(m.temperature) >= 92:
+                            stopped_since = started
                             core.stop("Left-arm motor fault or temperature")
-                        if abs(m.dq) > 0.2 or abs(m.q - core.q[i - 15]) > 0.12:
+                        if abs(m.dq) > 0.8 or abs(m.q - core.q[i - 15]) > 0.32:
+                            stopped_since = started
                             core.stop("Left-arm tracking fault")
                     if any(state.motor_state[i].mode != 0 for i in range(29) if i not in LEFT):
+                        stopped_since = started
                         core.stop("Unexpected other-joint activation")
+
+                # Relax when /relax was requested or if motor is hot (>=85C) while stopped
+                hot_while_stopped = (
+                    core.stopped
+                    and state is not None
+                    and any(max(state.motor_state[i].temperature) >= 85 for i in LEFT)
+                )
+                if hot_while_stopped and relax_requested_at is None:
+                    relax_requested_at = started
+                relax_s = (started - relax_requested_at) if (core.stopped and relax_requested_at is not None) else -1.0
+
                 msg = unitree_hg_msg_dds__LowCmd_()
                 msg.mode_pr = 0
                 msg.mode_machine = 5
-                for i in LEFT:
-                    m = msg.motor_cmd[i]
-                    m.mode = 1
-                    m.q = core.q[i - 15]
-                    m.dq = 0.0
-                    m.tau = 0.0
-                    m.kp = 40.0 if i < 19 else 12.0
-                    m.kd = 2.0 if i < 19 else 0.8
+                if relax_s >= 2.5:
+                    # Send mode=0 (zero torque) and deactivate until next /enable
+                    for i in LEFT:
+                        m = msg.motor_cmd[i]
+                        m.mode = 0
+                        m.q = 0.0
+                        m.dq = 0.0
+                        m.tau = 0.0
+                        m.kp = 0.0
+                        m.kd = 0.0
+                    if relax_s >= 2.65:
+                        core.active = False
+                        relax_requested_at = None
+                elif relax_s >= 0.0:
+                    # Smooth 2.5s damping ramp-down so arm lowers slowly and gently without dropping
+                    scale = max(0.0, 1.0 - (relax_s / 2.5))
+                    for i in LEFT:
+                        m = msg.motor_cmd[i]
+                        m.mode = 1
+                        m.q = core.q[i - 15]
+                        m.dq = 0.0
+                        m.tau = 0.0
+                        base_kp = 40.0 if i == 15 else (45.0 if i < 19 else 18.0)
+                        m.kp = base_kp * scale
+                        m.kd = 3.5 if i < 19 else 1.8
+                else:
+                    for i in LEFT:
+                        m = msg.motor_cmd[i]
+                        m.mode = 1
+                        m.q = core.q[i - 15]
+                        m.dq = 0.0
+                        m.tau = 0.0
+                        m.kp = 40.0 if i == 15 else (45.0 if i < 19 else 18.0)
+                        m.kd = 2.0 if i < 19 else 1.0
                 # All other motor commands keep default inactive mode=0,
                 # zero gains/torque. They must have been inactive at enable.
                 msg.crc = crc.Crc(msg)
@@ -161,19 +237,23 @@ def control_loop():
                     publisher.Write(msg)
                     arm_writes += 1
                 except Exception as exc:
-                    core.stop("DDS publish failed")
+                    if not core.stopped:
+                        stopped_since = started
+                        core.stop("DDS publish failed")
                     last_fault = type(exc).__name__
         time.sleep(max(0, 0.004 - (time.monotonic() - started)))
 
 
 def hand_loop():
     global hand_data, hand_updated, hand_error, hand_writes
-    try:
-        hand = InspireLeft()
-    except Exception as exc:
-        with lock:
-            hand_error = type(exc).__name__ + ": " + str(exc)
-        return
+    hand = None
+    while hand is None:
+        try:
+            hand = InspireLeft()
+        except Exception as exc:
+            with lock:
+                hand_error = type(exc).__name__ + ": " + str(exc)
+            time.sleep(1.0)
     while True:
         try:
             data = hand.telemetry()
@@ -184,12 +264,12 @@ def hand_loop():
                 if any(data["errors"]) or max(data["temperature_c"]) >= 60:
                     hand_error = "Left hand fault or overtemperature"
                     core.stop(hand_error)
-                write_q = core.hand_q.copy() if core.active else None
+                write_q = core.hand_q.copy() if core.active and hand_write_enabled else None
             if write_q is not None:
                 # Serial I/O must not block the arm watchdog or STOP lock.
                 # At most one already-queued incremental hand write may finish
                 # when STOP races this write; the next write is the frozen grip.
-                hand.set_positions(write_q)
+                hand.set_positions(write_q, config.get('disabled_left_hand_channels', []))
                 with lock:
                     hand_writes += 1
         except Exception as exc:
@@ -231,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
             self.reply({"error": "Not found"}, 404)
 
     def do_POST(self):
+        global hand_write_enabled
         if not self.allowed():
             self.reply({"error": "PC address only"}, 403)
             return
@@ -239,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
             if length > 4096:
                 raise ValueError("Request too large")
             data = json.loads(self.rfile.read(length)) if length else {}
-            if self.path not in ('/stop','/heartbeat','/prepare-lowlevel'):
+            if self.path not in ('/stop','/relax','/heartbeat','/prepare-lowlevel'):
                 boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip()
                 if data.get('boot_id') != boot_id:
                     raise ValueError('Robot boot ID changed or is missing')
@@ -255,6 +336,8 @@ class Handler(BaseHTTPRequestHandler):
                 with lock:
                     if self.path == "/stop":
                         stop("PC stop")
+                    elif self.path == "/relax":
+                        relax("PC relax")
                     elif self.path == "/heartbeat":
                         core.heartbeat()
                     elif self.path == "/move-left-arm":
@@ -269,7 +352,10 @@ class Handler(BaseHTTPRequestHandler):
                                   float(data["speed_rad_s"]), data["generation"])
                         log({"event": "argon_arm_command", "command": data, "goal_q": core.target})
                     elif self.path == "/move-left-hand":
+                        if any(abs(data['q'][i]-core.hand_q[i])>1e-6 for i in config.get('disabled_left_hand_channels', [])):
+                            raise ValueError('Damaged pinky/ring commands are forbidden')
                         core.hand_move(data["q"], data["generation"])
+                        hand_write_enabled = True
                         log({"event": "argon_hand_command", "command": data})
                     elif self.path == "/trajectory":
                         for w in data["waypoints"]:
@@ -302,6 +388,19 @@ if __name__ == "__main__":
     switcher = MotionSwitcherClient()
     switcher.SetTimeout(1.0)
     switcher.Init()
+    checkpoint_path=root/'config/holding-transfer-state.json'
+    if checkpoint_path.exists():
+        checkpoint=json.loads(checkpoint_path.read_text())
+        checkpoint_path.unlink()  # Single-use; a failed transfer cannot replay.
+        deadline=time.monotonic()+3
+        while state is None and time.monotonic()<deadline:time.sleep(.01)
+        with lock:
+            if time.monotonic()-core.last_state>.1:raise ValueError('Stale hardware state during transfer')
+            q,h,generation=validate_checkpoint(checkpoint,state,Path('/proc/sys/kernel/random/boot_id').read_text().strip(),time.monotonic())
+            core.q=q.copy();core.target=q.copy();core.hand_q=h.copy();core.hand_target=h.copy()
+            core.active=True;core.stopped=True;core.generation=generation
+            core.reason='Restored previous stopped left-arm hold; no queued movement'
+        log({'event':'hold_restored','generation':generation,'hand_write_enabled':False})
     signal.signal(signal.SIGTERM, lambda *args: stop("Service termination requested; holding"))
     signal.signal(signal.SIGINT, lambda *args: stop("Keyboard stop; holding"))
     threading.Thread(target=control_loop, daemon=True).start()

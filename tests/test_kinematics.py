@@ -27,5 +27,12 @@ class KinematicsTests(unittest.TestCase):
     def test_unreachable_target_rejected(self):
         full=self.k.configuration(self.s)
         with self.assertRaises(ValueError):self.k.solve(full,[10,10,10])
+    def test_dfq_pinky_telemetry_and_thumb_mimic(self):
+        s=dict(self.s,left_hand={'q':[.5,1,1,1,.5,.83]})
+        q=self.k.configuration(s)
+        def angle(name):return q[self.k.model.joints[self.k.model.getJointId(name)].idx_q]
+        self.assertAlmostEqual(angle('L_pinky_proximal_joint'),.85)
+        self.assertAlmostEqual(angle('L_pinky_intermediate_joint'),.85)
+        self.assertAlmostEqual(angle('L_thumb_intermediate_joint'),1.6*angle('L_thumb_proximal_pitch_joint'))
 
 if __name__=='__main__':unittest.main()

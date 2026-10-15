@@ -65,6 +65,19 @@ class SafetyTests(unittest.TestCase):
         self.core.observe()
         with self.assertRaises(ValueError):
             self.core.enable([0.0] * 7)
+    def test_resume_preserves_holding_torque_and_grip_targets(self):
+        self.core.q[0]=-.08
+        self.core.hand_q[2]=.7
+        self.core.stop()
+        generation=self.core.generation
+        self.core.enable([0]*7,[.8]*6)
+        self.assertEqual(self.core.q[0],-.08)
+        self.assertEqual(self.core.target,self.core.q)
+        self.assertEqual(self.core.hand_q[2],.7)
+        self.assertGreater(self.core.generation,generation)
+    def test_large_tracking_error_cannot_resume(self):
+        self.core.stop()
+        with self.assertRaises(ValueError):self.core.enable([.3]*7)
 
 
 if __name__ == "__main__":
