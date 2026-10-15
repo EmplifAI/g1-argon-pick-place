@@ -129,23 +129,31 @@ def ensure_camera_ready(force_restart=False):
 def run_g1_ssh_bootstrap(force_restart=False):
     """SSH into G1 (192.168.123.164), ensure serial permissions, videohub_pc4, and g1-argon-bridge.service."""
     script = (
-        'import os, re, pathlib, paramiko, time\n'
-        'note_p = pathlib.Path.home() / "unitree-g1-matome-2026-07-11.md"\n'
-        'tokens = ([os.environ["G1_SSH_PASSWORD"]] if os.environ.get("G1_SSH_PASSWORD") else []) + (re.findall(r"`([^`]+)`", note_p.read_text()) if note_p.exists() else [])\n'
+        'import os, re, pathlib, paramiko\n'
         'ssh = paramiko.SSHClient()\n'
         'ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n'
+        'connected = False\n'
         'pw = None\n'
-        'for t in tokens:\n'
-        '    if t in ("unitree", "192.168.123.164", "192.168.123.161", "eno1") or "/" in t or " " in t or len(t) < 3:\n'
-        '        continue\n'
-        '    try:\n'
-        '        ssh.connect("192.168.123.164", username="unitree", password=t, timeout=3.5)\n'
-        '        pw = t\n'
-        '        break\n'
-        '    except Exception:\n'
-        '        continue\n'
-        'if not pw:\n'
-        '    raise SystemExit("G1(192.168.123.164)へSSH接続できません。G1の電源とLAN接続を確認してください")\n'
+        'try:\n'
+        '    ssh.connect("192.168.123.164", username="unitree", timeout=2.5)\n'
+        '    connected = True\n'
+        'except Exception:\n'
+        '    pass\n'
+        'if not connected:\n'
+        '    note_p = pathlib.Path.home() / "unitree-g1-matome-2026-07-11.md"\n'
+        '    tokens = ([os.environ["G1_SSH_PASSWORD"]] if os.environ.get("G1_SSH_PASSWORD") else []) + (re.findall(r"`([^`]+)`", note_p.read_text()) if note_p.exists() else [])\n'
+        '    for t in reversed(tokens):\n'
+        '        if t in ("unitree", "192.168.123.164", "192.168.123.161", "eno1") or "/" in t or " " in t or len(t) < 3 or len(t) > 24:\n'
+        '            continue\n'
+        '        try:\n'
+        '            ssh.connect("192.168.123.164", username="unitree", password=t, timeout=2.5, look_for_keys=False, allow_agent=False)\n'
+        '            pw = t\n'
+        '            connected = True\n'
+        '            break\n'
+        '        except Exception:\n'
+        '            continue\n'
+        'if not connected:\n'
+        '    raise SystemExit("G1(192.168.123.164)へSSH接続できません")\n'
         'sftp = ssh.open_sftp()\n'
         'changed = False\n'
         'for fname in ("robot_stop_bridge.py", "safety_core.py"):\n'
@@ -160,19 +168,29 @@ def run_g1_ssh_bootstrap(force_restart=False):
         '            f.write(local_b)\n'
         '        changed = True\n'
         'sftp.close()\n'
-        'stdin, stdout, _ = ssh.exec_command("sudo -S sh -c \'chmod 666 /dev/ttyUSB* 2>/dev/null || true; systemctl start g1-videohub-ready.service 2>/dev/null || true\'", get_pty=True)\n'
-        'stdin.write(pw + "\\n")\n'
-        'stdin.flush()\n'
-        'stdout.read()\n'
+        'cmd_sudo = "sudo -n sh -c \'chmod 666 /dev/ttyUSB* 2>/dev/null || true; systemctl start --no-block g1-videohub-ready.service 2>/dev/null || true\'"\n'
+        'if pw:\n'
+        '    stdin, stdout, _ = ssh.exec_command("sudo -S sh -c \'chmod 666 /dev/ttyUSB* 2>/dev/null || true; systemctl start --no-block g1-videohub-ready.service 2>/dev/null || true\'", get_pty=True, timeout=4.0)\n'
+        '    stdin.write(pw + "\\n")\n'
+        '    stdin.flush()\n'
+        'else:\n'
+        '    _, stdout, _ = ssh.exec_command(cmd_sudo, timeout=4.0)\n'
+        'stdout.channel.recv_exit_status()\n'
         f'force = {bool(force_restart)!r}\n'
-        '_, stdout, _ = ssh.exec_command("pgrep -f robot_stop_bridge.py")\n'
+        '_, stdout, _ = ssh.exec_command("pgrep -f robot_stop_bridge.py", timeout=3.0)\n'
         'running = bool(stdout.read().decode().strip())\n'
         'if force or changed or not running:\n'
-        '    _, stdout, _ = ssh.exec_command("systemctl --user restart g1-argon-bridge.service 2>/dev/null || pkill -f robot_stop_bridge.py")\n'
-        '    stdout.read()\n'
+        '    _, stdout, _ = ssh.exec_command("systemctl --user restart --no-block g1-argon-bridge.service 2>/dev/null || pkill -f robot_stop_bridge.py >/dev/null 2>&1 || true", timeout=4.0)\n'
+        '    stdout.channel.recv_exit_status()\n'
         'ssh.close()\n'
     )
-    subprocess.run(['/usr/bin/python3', '-c', script], check=True, timeout=14.0)
+    try:
+        subprocess.run(['/usr/bin/python3', '-c', script], check=True, timeout=12.0, capture_output=True, text=True)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('G1本体(192.168.123.164)へのSSH初期化がタイムアウトしました。再度ボタンを押してください') from None
+    except subprocess.CalledProcessError as exc:
+        msg = (exc.stderr or exc.stdout or '').strip().splitlines()[-1:]
+        raise RuntimeError(msg[0] if msg else 'G1本体(192.168.123.164)へのSSH初期化に失敗しました') from None
 
 
 def sync_bridge_to_g1_if_needed(boot_id: str):
