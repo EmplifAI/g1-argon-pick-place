@@ -1,0 +1,16 @@
+{
+  "kind": "public_video_provenance",
+  "author": "Hiroyuki Osone / EmplifAI",
+  "source": "https://x.com/OsoneHiroyuki/status/2110614582570164644",
+  "robot": "Unitree G1",
+  "reported_outcome": "Upright bottle transport in a lab demonstration",
+  "frames": [
+    {"source_time_s": 60, "file": "docs/assets/demo-060s.jpg"},
+    {"source_time_s": 90, "file": "docs/assets/demo-090s.jpg"},
+    {"source_time_s": 120, "file": "docs/assets/demo-120s.jpg"}
+  ],
+  "sensor_telemetry_included": false,
+  "success_rate": null,
+  "independent_reproduction": null,
+  "release_hardware_revalidation": false
+}

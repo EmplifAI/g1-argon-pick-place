@@ -13,3 +13,10 @@ config/*.pid
 config/calibration.json
 *.pem
 *.key
+
+.DS_Store
+*.egg-info/
+build/
+dist/
+.coverage
+.pytest_cache/

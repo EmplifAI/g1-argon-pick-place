@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+message: "If you build on this experiment, please cite the software and link your reproduction."
+title: "G1 / ARGON: An Open Experiment in Language-Guided Humanoid Control"
+type: software
+authors:
+  - family-names: Osone
+    given-names: Hiroyuki
+  - name: EmplifAI
+repository-code: "https://github.com/EmplifAI/g1-argon-pick-place"
+url: "https://emplif.ai/"
+license: Apache-2.0
+version: 0.2.0
+date-released: 2026-10-16

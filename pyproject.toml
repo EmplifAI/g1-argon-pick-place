@@ -1,11 +1,19 @@
 [project]
 name = "g1-argon-pick-place"
-version = "0.1.0"
+version = "0.2.0"
 description = "Argon-controlled left-arm pick and place on a suspended Unitree G1 with RH56DFQ"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
+license = {file = "LICENSE"}
+readme = "README.md"
+authors = [{name = "EmplifAI"}]
 dependencies = ["numpy", "scipy", "pillow", "paramiko"]
 
+[project.urls]
+Homepage = "https://emplif.ai"
+Repository = "https://github.com/EmplifAI/g1-argon-pick-place"
+
 [project.optional-dependencies]
+robot = ["pin>=4,<5"]
 vision = ["pyrealsense2", "trimesh", "opencv-python"]
 
 [tool.setuptools]

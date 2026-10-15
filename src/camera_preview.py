@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Display the G1 video hub JPEG stream in a local browser."""
+import os
 import threading
 import time
 import webbrowser
@@ -111,7 +112,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-ChannelFactoryInitialize(0, "enp12s0")
+ChannelFactoryInitialize(0, os.environ.get("G1_NETWORK_INTERFACE", "eth0"))
 with socket.socket() as probe:
     if probe.connect_ex(("127.0.0.1", 8765)) == 0:
         print("G1 RealSense preview is already running at http://127.0.0.1:8765/", flush=True)

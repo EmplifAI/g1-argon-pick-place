@@ -4,6 +4,8 @@ API key comes from stdin, lives in memory only, and is never logged.
 """
 import base64
 import json
+import os
+import secrets
 import sys
 import threading
 import time
@@ -18,9 +20,10 @@ if not key:raise SystemExit('Missing API credential on stdin')
 lock=threading.RLock()
 cancel=threading.Event()
 running=False
-status='Argon low 接続済み・左腕練習の開始待ち'
+status='Ready for bounded left-arm practice.'
 step_counter=0
-ROBOT='http://192.168.123.164:8767'
+ROBOT=os.environ.get('G1_BRIDGE_URL', 'http://192.168.123.164:8767')
+CAMERA=os.environ.get('G1_CAMERA_URL', 'http://127.0.0.1:8765')
 
 def robot(path,data=None):
     req=urllib.request.Request(ROBOT+path,data=None if data is None else json.dumps(data).encode(),headers={'Content-Type':'application/json'})
@@ -38,15 +41,15 @@ def record(event,**data):
         f.write(json.dumps(dict(event=event,pc_time_s=time.time(),**data),ensure_ascii=False)+'\n')
 
 def frame():
-    health=json.load(urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=1))
+    health=json.load(urllib.request.urlopen(CAMERA+'/health',timeout=1))
     if not health['has_frame'] or health['frame_age_s']>0.5:
         raise ValueError('Camera frame is stale')
-    with urllib.request.urlopen('http://127.0.0.1:8765/stream',timeout=5) as r:
+    with urllib.request.urlopen(CAMERA+'/stream',timeout=5) as r:
         buf=b''
         while len(buf)<10000000:
             buf+=r.read(4096);s=buf.find(b'\xff\xd8');e=buf.find(b'\xff\xd9',max(0,s)+2)
             if s>=0 and e>=0:
-                health=json.load(urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=1))
+                health=json.load(urllib.request.urlopen(CAMERA+'/health',timeout=1))
                 if health['frame_age_s']>0.5:raise ValueError('Camera stalled')
                 return buf[s:e+2]
     raise ValueError('Camera frame unavailable')
@@ -59,9 +62,9 @@ pinky/ring or use their force readings as grasp evidence. Their positions are fr
 in planning and their serial target registers are excluded from writes.
 Every movement decision is yours, not another policy.
 You receive a fresh RGB image, robot state, and available depth/geometry metadata.
-Output ONLY one JSON primitive at a time with action and observation_ja.
-Actions: enable, observe, trial_left_arm, open_hand, move_left_hand, grasp_bottle,
-verify_grasp, place_at, release_at_B, stop, done.
+Output ONLY one JSON primitive at a time with action and observation_ja (write its value in English).
+Actions allowed in this session: enable, observe, trial_left_arm, stop, done.
+All hand and Cartesian actions are blocked by the executor, even if proposed.
 enable has no extra fields. It takes over the LEFT arm at measured position only;
 it does not move to home. It does not write hand targets until a hand tool is used.
 Current authorized mode: bounded ARM-ONLY PRACTICE, maximum THREE trials per start.
@@ -96,8 +99,7 @@ are exhausted, stop and explain the outcome. Do not open the hand in practice mo
 Raw finger force is NOT calibrated; absolute values are not reliable yet. Do not
 claim a stable grasp or lift without fresh visual and state evidence. Stop freezes
 the arm target and existing grip; it never opens the hand. PC heartbeat is required.
-After stop/done, no further movement is sent. done only when the bottle is upright,
-released, and verified at B. Use observe rather than inventing observations.
+After stop/done, no further movement is sent. done means the bounded arm practice has ended; never claim a completed grasp/place. Use observe rather than inventing observations.
 '''
 
 def ask(image,state,history,trial_candidates=None):
@@ -113,6 +115,9 @@ def ask(image,state,history,trial_candidates=None):
     targets=root/'captures/scene-targets.json'
     if targets.exists():content+='\nMeasured depth targets:'+targets.read_text()
     config=json.loads((root/'config/argon.json').read_text())
+    config['model']=os.environ.get('ARGON_MODEL', config['model'])
+    config['generation_config']['thinking_level']=os.environ.get('ARGON_THINKING', 'low')
+    config.pop('service_tier', None)
     body=dict(config,input=[{'type':'text','text':content},
        {'type':'image','mime_type':'image/jpeg','data':base64.b64encode(image).decode()}],
        store=False)
@@ -174,6 +179,8 @@ def work(initial_generation):
             current=robot('/state')
             if current['generation']!=expected_generation:raise ValueError('Argon判断中に停止しました')
             op=action.get('action')
+            from agent_adapter import validate_practice_action
+            validate_practice_action(action)
             status=action.get('observation_ja','Argon指令確認中')
             if op=='enable':
                 if current['controller_active'] and not current['stopped']:raise ValueError('Already enabled')
@@ -227,10 +234,19 @@ class Handler(BaseHTTPRequestHandler):
         body=json.dumps(data,ensure_ascii=False).encode();self.send_response(status_code)
         self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)))
         self.end_headers();self.wfile.write(body)
+    def authorized(self):
+        token=os.environ.get('ARGON_CONTROLLER_TOKEN')
+        if token and not secrets.compare_digest(self.headers.get('X-Controller-Token',''), token):
+            self.reply({'error':'Invalid controller session'},403);return False
+        if self.headers.get('Origin') or self.headers.get('Host') not in ('127.0.0.1:8768','localhost:8768'):
+            self.reply({'error':'Local controller access only'},403);return False
+        return True
     def do_GET(self):
-        self.reply({'ready':not running,'running':running,'status':status,'mode':'argon_vision_pick_place','pick_place_ready':True})
+        if not self.authorized():return
+        self.reply({'ready':not running,'running':running,'status':status,'mode':'bounded_arm_practice','pick_place_ready':False})
     def do_POST(self):
         global running,status
+        if not self.authorized():return
         try:
             if self.path=='/stop':
                 cancel.set();self.reply({'stopped':True});return
@@ -247,7 +263,7 @@ class Handler(BaseHTTPRequestHandler):
                 if state['generation']!=data['generation']:raise ValueError('STOP superseded start')
                 running=True;cancel.clear();status='Argon low 開始'
                 threading.Thread(target=work,args=(data['generation'],),daemon=True).start()
-            self.reply({'started':True,'model':'gemini-4-argon','thinking_level':'low'})
+            self.reply({'started':True,'model':os.environ.get('ARGON_MODEL','gemini-4-argon'),'thinking_level':os.environ.get('ARGON_THINKING','low')})
         except Exception as exc:self.reply({'error':str(exc)},409)
     def log_message(self,*args):pass
 

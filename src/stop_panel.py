@@ -1,5 +1,6 @@
 """PC panel: robot-local STOP, browser heartbeat, auto-reconnect on G1 boot, and one-click Argon pick-and-place."""
 import json
+import sys
 import subprocess
 import threading
 import time
@@ -128,71 +129,7 @@ def ensure_camera_ready(force_restart=False):
 
 def run_g1_ssh_bootstrap(force_restart=False):
     """SSH into G1 (192.168.123.164), ensure serial permissions, videohub_pc4, and g1-argon-bridge.service."""
-    script = (
-        'import os, re, pathlib, paramiko\n'
-        'ssh = paramiko.SSHClient()\n'
-        'ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())\n'
-        'connected = False\n'
-        'pw = None\n'
-        'try:\n'
-        '    ssh.connect("192.168.123.164", username="unitree", timeout=2.5)\n'
-        '    connected = True\n'
-        'except Exception:\n'
-        '    pass\n'
-        'if not connected:\n'
-        '    note_p = pathlib.Path.home() / "unitree-g1-matome-2026-07-11.md"\n'
-        '    tokens = ([os.environ["G1_SSH_PASSWORD"]] if os.environ.get("G1_SSH_PASSWORD") else []) + (re.findall(r"`([^`]+)`", note_p.read_text()) if note_p.exists() else [])\n'
-        '    for t in reversed(tokens):\n'
-        '        if t in ("unitree", "192.168.123.164", "192.168.123.161", "eno1") or "/" in t or " " in t or len(t) < 3 or len(t) > 24:\n'
-        '            continue\n'
-        '        try:\n'
-        '            ssh.connect("192.168.123.164", username="unitree", password=t, timeout=2.5, look_for_keys=False, allow_agent=False)\n'
-        '            pw = t\n'
-        '            connected = True\n'
-        '            break\n'
-        '        except Exception:\n'
-        '            continue\n'
-        'if not connected:\n'
-        '    raise SystemExit("G1(192.168.123.164)へSSH接続できません")\n'
-        'sftp = ssh.open_sftp()\n'
-        'changed = False\n'
-        'for fname in ("robot_stop_bridge.py", "safety_core.py"):\n'
-        '    remote_p = f"/home/unitree/g1-argon-bottle/src/{fname}"\n'
-        '    local_b = pathlib.Path(f"/home/soneo/g1-argon-bottle/src/{fname}").read_bytes()\n'
-        '    try:\n'
-        '        remote_b = sftp.open(remote_p, "rb").read()\n'
-        '    except Exception:\n'
-        '        remote_b = b""\n'
-        '    if remote_b != local_b:\n'
-        '        with sftp.open(remote_p, "wb") as f:\n'
-        '            f.write(local_b)\n'
-        '        changed = True\n'
-        'sftp.close()\n'
-        'cmd_sudo = "sudo -n sh -c \'chmod 666 /dev/ttyUSB* 2>/dev/null || true; systemctl start --no-block g1-videohub-ready.service 2>/dev/null || true\'"\n'
-        'if pw:\n'
-        '    stdin, stdout, _ = ssh.exec_command("sudo -S sh -c \'chmod 666 /dev/ttyUSB* 2>/dev/null || true; systemctl start --no-block g1-videohub-ready.service 2>/dev/null || true\'", get_pty=True, timeout=4.0)\n'
-        '    stdin.write(pw + "\\n")\n'
-        '    stdin.flush()\n'
-        'else:\n'
-        '    _, stdout, _ = ssh.exec_command(cmd_sudo, timeout=4.0)\n'
-        'stdout.channel.recv_exit_status()\n'
-        '_, stdout, _ = ssh.exec_command("systemctl --user is-active g1-argon-bridge.service", timeout=3.0)\n'
-        'svc_state = stdout.read().decode().strip()\n'
-        'if svc_state == "deactivating" or changed:\n'
-        '    _, stdout, _ = ssh.exec_command("systemctl --user kill -s SIGKILL g1-argon-bridge.service 2>/dev/null || true; systemctl --user reset-failed g1-argon-bridge.service 2>/dev/null || true; systemctl --user start g1-argon-bridge.service", timeout=4.0)\n'
-        '    stdout.channel.recv_exit_status()\n'
-        'elif svc_state != "active":\n'
-        '    _, stdout, _ = ssh.exec_command("systemctl --user reset-failed g1-argon-bridge.service 2>/dev/null || true; systemctl --user start g1-argon-bridge.service", timeout=4.0)\n'
-        '    stdout.channel.recv_exit_status()\n'
-        'ssh.close()\n'
-    )
-    try:
-        subprocess.run(['/usr/bin/python3', '-c', script], check=True, timeout=12.0, capture_output=True, text=True)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError('G1本体(192.168.123.164)へのSSH初期化がタイムアウトしました。再度ボタンを押してください') from None
-    except subprocess.CalledProcessError as exc:
-        msg = (exc.stderr or exc.stdout or '').strip().splitlines()[-1:]
-        raise RuntimeError(msg[0] if msg else 'G1本体(192.168.123.164)へのSSH初期化に失敗しました') from None
+    raise RuntimeError('Automatic SSH bootstrap is retired. Use scripts/deploy_robot.py after hardware setup.')
 
 
 def sync_bridge_to_g1_if_needed(boot_id: str):
@@ -584,7 +521,7 @@ def run_one_click_pick_and_place(return_home_only=False, lower_arm_only=False, i
         state_path.write_text(json.dumps(st_now))
 
         subprocess.check_output([
-            '/home/soneo/miniforge3/envs/xr-teleop/bin/python',
+            sys.executable,
             str(root / 'src/vision_ik_planner.py'),
             '--prepare-argon',
             str(root),
@@ -597,7 +534,7 @@ def run_one_click_pick_and_place(return_home_only=False, lower_arm_only=False, i
         st_now = ensure_enabled()
         state_path.write_text(json.dumps(st_now))
         out = subprocess.check_output([
-            '/home/soneo/miniforge3/envs/xr-teleop/bin/python',
+            sys.executable,
             str(root / 'src/vision_ik_planner.py'),
             '--plan',
             str(root),
@@ -633,7 +570,7 @@ def run_one_click_pick_and_place(return_home_only=False, lower_arm_only=False, i
         move_hand_to([1.0, 1.0, 1.0, 0.0], steps=6, force_stop=False)
 
         subprocess.check_output([
-            '/home/soneo/miniforge3/envs/xr-teleop/bin/python',
+            sys.executable,
             str(root / 'src/vision_ik_planner.py'),
             '--prepare-verify-b',
             str(root),
@@ -793,6 +730,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == '__main__':
+    raise SystemExit('Legacy experimental panel retired. Run python3 scripts/start_web.py instead.')
     latch_stop('PC panel startup')
     try:
         request(ROBOT, '/stop', {})

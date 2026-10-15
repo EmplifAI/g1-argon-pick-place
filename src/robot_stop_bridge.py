@@ -3,6 +3,7 @@
 Starts observing only. No motor or hand writes until an explicit enable.
 Never sends active commands to right arm, waist or legs.
 """
+import os
 import json
 import math
 import signal
@@ -148,7 +149,6 @@ def prepare_lowlevel():
 def control_loop():
     global arm_writes, last_loop, last_fault, stopped_since, relax_requested_at
     was_stopped = True
-    startup_relax_sent = False
     while True:
         started = time.monotonic()
         with lock:
@@ -158,13 +158,6 @@ def control_loop():
             if core.stopped and not was_stopped:
                 stopped_since = started
             was_stopped = core.stopped
-
-            # If bridge just started and hardware left arm is still holding mode=1 from earlier, relax it to mode=0
-            if not startup_relax_sent and state is not None and not core.active:
-                startup_relax_sent = True
-                if any(state.motor_state[i].mode != 0 for i in LEFT):
-                    core.active = True
-                    relax_requested_at = started
 
             if core.active:
                 if state is not None and not core.stopped:
@@ -300,7 +293,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def allowed(self):
-        return self.client_address[0] in ("192.168.123.99", "127.0.0.1")
+        return self.client_address[0] in (os.environ.get("G1_OPERATOR_IP", "192.168.123.99"), "127.0.0.1")
 
     def do_GET(self):
         if not self.allowed():
@@ -379,7 +372,7 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ChannelFactoryInitialize(0, "eth0")
+    ChannelFactoryInitialize(0, os.environ.get("G1_NETWORK_INTERFACE", "eth0"))
     subscriber = ChannelSubscriber("rt/lowstate", LowState_)
     subscriber.Init(receive, 1)
     publisher = ChannelPublisher("rt/lowcmd", LowCmd_)
@@ -407,4 +400,4 @@ if __name__ == "__main__":
     threading.Thread(target=hand_loop, daemon=True).start()
     threading.Thread(target=record_loop, daemon=True).start()
     log({"event": "startup", "stopped": True, "motor_writes": 0})
-    ThreadingHTTPServer(("192.168.123.164", 8767), Handler).serve_forever()
+    ThreadingHTTPServer((os.environ.get("G1_BIND_IP", "192.168.123.164"), 8767), Handler).serve_forever()

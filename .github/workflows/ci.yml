@@ -1,0 +1,41 @@
+name: Offline checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m unittest discover -s tests -p 'test_web*.py' -v
+      - run: python -m compileall -q src scripts
+      - run: node --check web/app.js
+      - run: pip install -e '.[robot]'
+      - run: bash scripts/fetch_robot_description.sh
+      - name: Install official SDK and native DDS
+        run: |
+          git clone --depth 1 --branch releases/0.10.x https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/cyclonedds
+          cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build -DCMAKE_INSTALL_PREFIX=/tmp/cyclonedds/install -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
+          cmake --build /tmp/cyclonedds/build --target install -j 2
+          CYCLONEDDS_HOME=/tmp/cyclonedds/install pip install 'unitree-sdk2py @ git+https://github.com/unitreerobotics/unitree_sdk2_python.git@814556d15970dd2ecf1c9984e845ca02ab07e206'
+      - run: python -m unittest discover -s tests -v
+        env:
+          CYCLONEDDS_HOME: /tmp/cyclonedds/install
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Require sign-offs on new PR commits
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: python scripts/check_dco.py
