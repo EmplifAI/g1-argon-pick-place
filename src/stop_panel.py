@@ -176,11 +176,13 @@ def run_g1_ssh_bootstrap(force_restart=False):
         'else:\n'
         '    _, stdout, _ = ssh.exec_command(cmd_sudo, timeout=4.0)\n'
         'stdout.channel.recv_exit_status()\n'
-        f'force = {bool(force_restart)!r}\n'
-        '_, stdout, _ = ssh.exec_command("pgrep -f robot_stop_bridge.py", timeout=3.0)\n'
-        'running = bool(stdout.read().decode().strip())\n'
-        'if force or changed or not running:\n'
-        '    _, stdout, _ = ssh.exec_command("systemctl --user restart --no-block g1-argon-bridge.service 2>/dev/null || pkill -f robot_stop_bridge.py >/dev/null 2>&1 || true", timeout=4.0)\n'
+        '_, stdout, _ = ssh.exec_command("systemctl --user is-active g1-argon-bridge.service", timeout=3.0)\n'
+        'svc_state = stdout.read().decode().strip()\n'
+        'if svc_state == "deactivating" or changed:\n'
+        '    _, stdout, _ = ssh.exec_command("systemctl --user kill -s SIGKILL g1-argon-bridge.service 2>/dev/null || true; systemctl --user reset-failed g1-argon-bridge.service 2>/dev/null || true; systemctl --user start g1-argon-bridge.service", timeout=4.0)\n'
+        '    stdout.channel.recv_exit_status()\n'
+        'elif svc_state != "active":\n'
+        '    _, stdout, _ = ssh.exec_command("systemctl --user reset-failed g1-argon-bridge.service 2>/dev/null || true; systemctl --user start g1-argon-bridge.service", timeout=4.0)\n'
         '    stdout.channel.recv_exit_status()\n'
         'ssh.close()\n'
     )
@@ -205,21 +207,27 @@ def sync_bridge_to_g1_if_needed(boot_id: str):
 
 
 def auto_watchdog_loop():
-    """Automatically recover camera stream and sync bridge whenever G1 is online."""
+    """Automatically recover camera stream and sync bridge whenever G1 is online (never kills active bridge)."""
     import socket
+    fail_count = 0
     while True:
         try:
-            st = request(ROBOT, '/state', timeout=0.7)
-            sync_bridge_to_g1_if_needed(st.get('boot_id', ''))
-            if not check_camera_fresh():
-                ensure_camera_ready()
+            st = request(ROBOT, '/state', timeout=1.0)
+            fail_count = 0
+            if not macro_running:
+                sync_bridge_to_g1_if_needed(st.get('boot_id', ''))
+                if not check_camera_fresh():
+                    ensure_camera_ready()
         except Exception:
-            try:
-                with socket.create_connection(('192.168.123.164', 22), timeout=0.6):
+            fail_count += 1
+            if fail_count >= 3 and not macro_running:
+                try:
+                    with socket.create_connection(('192.168.123.164', 22), timeout=0.8):
+                        pass
+                    run_g1_ssh_bootstrap(force_restart=False)
+                    fail_count = 0
+                except Exception:
                     pass
-                run_g1_ssh_bootstrap(force_restart=True)
-            except Exception:
-                pass
         time.sleep(3.0)
 
 
