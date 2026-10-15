@@ -23,7 +23,7 @@ jobs:
           git clone --depth 1 --branch releases/0.10.x https://github.com/eclipse-cyclonedds/cyclonedds.git /tmp/cyclonedds
           cmake -S /tmp/cyclonedds -B /tmp/cyclonedds/build -DCMAKE_INSTALL_PREFIX=/tmp/cyclonedds/install -DBUILD_EXAMPLES=OFF -DBUILD_TESTING=OFF
           cmake --build /tmp/cyclonedds/build --target install -j 2
-          CYCLONEDDS_HOME=/tmp/cyclonedds/install pip install 'unitree-sdk2py @ git+https://github.com/unitreerobotics/unitree_sdk2_python.git@814556d15970dd2ecf1c9984e845ca02ab07e206'
+          CYCLONEDDS_HOME=/tmp/cyclonedds/install pip install -e 'git+https://github.com/unitreerobotics/unitree_sdk2_python.git@814556d15970dd2ecf1c9984e845ca02ab07e206#egg=unitree-sdk2py'
       - run: python -m unittest discover -s tests -v
         env:
           CYCLONEDDS_HOME: /tmp/cyclonedds/install

@@ -26,10 +26,12 @@ to its installation directory before installing and running the SDK (keep the
 variable set when running tests or hardware tools):
 
 ```sh
-pip install 'unitree-sdk2py @ git+https://github.com/unitreerobotics/unitree_sdk2_python.git@814556d15970dd2ecf1c9984e845ca02ab07e206'
+pip install -e 'git+https://github.com/unitreerobotics/unitree_sdk2_python.git@814556d15970dd2ecf1c9984e845ca02ab07e206#egg=unitree-sdk2py'
 python -m unittest discover -s tests -v
 ```
 
+Use the editable (`-e`) SDK installation: the pinned upstream wheel omits its
+Linux CRC shared libraries. Keeping the source checkout preserves those files.
 No test sends motion to a robot. CI builds the native DDS library separately.
 
 ## 2. Match the physical setup
